@@ -49,6 +49,20 @@ function sparkline(amounts: number[]): string {
     .join("")
 }
 
+// ascii reservoir: fills from the bottom up based on level ratio
+function reservoir(ratio: number, rows = 6, cols = 14): string {
+  const clamped = Math.max(0, Math.min(1, ratio))
+  const filledRows = Math.round(clamped * rows)
+  const lines: string[] = ["╔" + "═".repeat(cols) + "╗"]
+  for (let r = 0; r < rows; r++) {
+    const fromBottom = rows - r
+    const glyph = fromBottom <= filledRows ? "█" : "·"
+    lines.push("║" + glyph.repeat(cols) + "║")
+  }
+  lines.push("╚" + "═".repeat(cols) + "╝")
+  return lines.join("\n")
+}
+
 // soft 150ms ease-out tween for the hero balance numeral
 function useTween(target: number): number {
   const [value, setValue] = useState(target)
@@ -180,13 +194,10 @@ function Dashboard({
           <div className="caps mute">last 24 spends</div>
         </div>
         <div className="ap-hero-right">
-          <div className="caps mute">conflict test</div>
-          <pre className="ap-race">{`        \\               /
-         \\             /
-          ▾           ▾
-        [ pool ] $100 available`}</pre>
+          <div className="caps mute">reservoir</div>
+          <Reservoir balance={balance} />
           <button className="ap-runrace" onClick={onRunRace} type="button">
-            {`▸ run race  [ 2 × $80 vs $100 ]`}
+            {`> run race  [ 2 × $80 vs $100 ]`}
           </button>
         </div>
       </section>
@@ -264,6 +275,20 @@ function Dashboard({
       <footer className="ap-footer caps">
         <span>invariant {MIDDOT} balance {"≥"} 0 {MIDDOT} enforced in db</span>
       </footer>
+    </div>
+  )
+}
+
+function Reservoir({ balance }: { balance: number }) {
+  // high-water mark = the largest balance seen this session, used as tank capacity
+  const capRef = useRef(Math.max(balance, 1))
+  capRef.current = Math.max(capRef.current, balance, 1)
+  const ratio = balance / capRef.current
+  const pct = Math.round(ratio * 100)
+  return (
+    <div className="ap-reservoir">
+      <pre className="ap-tank">{reservoir(ratio)}</pre>
+      <div className="caps mute">{`pool level ${MIDDOT} ${pct}%`}</div>
     </div>
   )
 }
@@ -387,12 +412,16 @@ const styles = `
   margin-bottom: 8px;
   letter-spacing: 0.04em;
 }
-.ap-race {
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--ink);
+.ap-reservoir {
   margin: 12px 0 16px;
+}
+.ap-tank {
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: -0.06em;
+  color: var(--ink);
+  margin: 0 0 8px;
   white-space: pre;
 }
 .ap-runrace {
