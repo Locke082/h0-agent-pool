@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import dynamic from "next/dynamic"
+import type { TankSegment } from "@/components/webgl-tank"
 
 // WebGL renders client-only (three.js touches window/canvas)
 const WebglTank = dynamic(() => import("@/components/webgl-tank"), {
@@ -193,9 +194,14 @@ function Dashboard({
   const poolRatio = balance / poolCapRef.current
   const poolPct = Math.round(poolRatio * 100)
 
-  // per-agent approved spend (from recent activity), used to fill each agent tank
+  // per-agent spend sections (oldest -> newest) + running approved total for the label.
+  // activity is newest-first, so reverse it to stack the earliest spends at the bottom.
+  const segmentsByAgent = new Map<string, TankSegment[]>()
   const spendByAgent = new Map<string, number>()
-  for (const row of activity) {
+  for (const row of [...activity].reverse()) {
+    const segs = segmentsByAgent.get(row.agentName) ?? []
+    segs.push({ amount: row.amount, outcome: row.outcome })
+    segmentsByAgent.set(row.agentName, segs)
     if (row.outcome === "approved") {
       spendByAgent.set(row.agentName, (spendByAgent.get(row.agentName) ?? 0) + row.amount)
     }
@@ -230,7 +236,8 @@ function Dashboard({
           <div className="iso-tanks">
             <DashTank
               size="lg"
-              ratio={poolRatio}
+              segments={[{ amount: balance, outcome: "approved" }]}
+              capacity={poolCapRef.current}
               color={POOL_COLOR}
               flash={raceFlash}
               value={money(Math.round(balance))}
@@ -242,7 +249,8 @@ function Dashboard({
                 <DashTank
                   key={a.id}
                   size="sm"
-                  ratio={spend / a.cap}
+                  segments={segmentsByAgent.get(a.name) ?? []}
+                  capacity={a.cap}
                   color={AGENT_COLORS[i % AGENT_COLORS.length]}
                   flash={raceFlash}
                   value={money(spend)}
@@ -368,14 +376,16 @@ function useFreshRows(activity: DashboardState["activity"]): Set<string> {
 
 // WebGL 3D tank: real lit volume that fills bottom-up, fixed color per tank
 function DashTank({
-  ratio,
+  segments,
+  capacity,
   color,
   size = "lg",
   flash,
   label,
   value,
 }: {
-  ratio: number
+  segments: TankSegment[]
+  capacity: number
   color: string
   size?: "lg" | "sm"
   flash?: number
@@ -393,7 +403,7 @@ function DashTank({
   return (
     <div className={`iso-col iso-${size}`}>
       <div className={`gl-stage${flashing ? " gl-flash" : ""}`}>
-        <WebglTank ratio={ratio} color={color} />
+        <WebglTank segments={segments} capacity={capacity} color={color} />
       </div>
       <div className="iso-meta">
         <div className="iso-val">{value}</div>
