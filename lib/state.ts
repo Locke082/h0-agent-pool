@@ -1,4 +1,8 @@
-import { query } from "./db/db";
+import { queryOn } from "./db/db";
+
+// Dashboard reads always hit the primary pool — single source of truth
+// (writes replicate cross-region, so primary reflects everything).
+const query = (sql: string, args: unknown[]) => queryOn("primary", sql, args);
 
 export type DashboardState = {
   pool: { id: string; name: string; balance: number }; // balance in cents
@@ -46,14 +50,14 @@ async function fetchActivity(): Promise<DashboardState["activity"]> {
     const { rows } = await query(
       `SELECT t.id, a.name AS agent_name, t.amount, t.outcome, t.reason, t.region, t.created_at
        FROM transactions t JOIN agents a ON a.id = t.agent_id
-       ORDER BY t.created_at DESC LIMIT 20`,
+       ORDER BY t.created_at DESC LIMIT 30`,
       [],
     );
     return rows.map(toActivity);
   } catch {
     const [{ rows }, names] = await Promise.all([
       query(
-        "SELECT id, agent_id, amount, outcome, reason, region, created_at FROM transactions ORDER BY created_at DESC LIMIT 20",
+        "SELECT id, agent_id, amount, outcome, reason, region, created_at FROM transactions ORDER BY created_at DESC LIMIT 30",
         [],
       ),
       agentNames(),

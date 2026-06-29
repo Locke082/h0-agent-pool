@@ -105,26 +105,48 @@ export default function Page() {
 
   const tweenedBalance = useTween(state?.pool.balance ?? 0)
 
-  function spend(agentId: string, amount: number, region: string) {
+  function spend(
+    agentId: string,
+    amount: number,
+    regionDisplay: string,
+    regionRoute: "primary" | "secondary",
+  ) {
     return fetch("/api/spend", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId, amount, region }),
+      // region = routing pool, regionLabel = human-facing region for the feed
+      body: JSON.stringify({ agentId, amount, region: regionRoute, regionLabel: regionDisplay }),
     })
   }
 
   function runRace() {
-    if (!state || state.agents.length < 2) return
-    // don't await — the 1s poll reflects results
-    Promise.all([
-      spend(state.agents[0].id, 8000, "us-east-1"),
-      spend(state.agents[1].id, 8000, "eu-west-1"),
-    ]).catch(() => {})
+    if (!state) return
+    const byName = (n: string) => state.agents.find((a) => a.name === n)
+    const a1 = byName("agent-01")
+    const a2 = byName("agent-02")
+    const a3 = byName("agent-03")
+    if (!a1 || !a2 || !a3) return
+    // fleet burst: 30 concurrent $80 spends — agent-01 & agent-03 hit primary
+    // (eu-west-1), agent-02 hits secondary (eu-west-3). 10 each.
+    // per-promise catch so one failed request can't sink the rest.
+    const burst: Promise<unknown>[] = []
+    for (let i = 0; i < 10; i++) {
+      burst.push(spend(a1.id, 8000, "eu-west-1", "primary").catch(() => {}))
+      burst.push(spend(a2.id, 8000, "eu-west-3", "secondary").catch(() => {}))
+      burst.push(spend(a3.id, 8000, "eu-west-1", "primary").catch(() => {}))
+    }
+    // fire all 30 at once; the 1s poll reflects results
+    Promise.all(burst).catch(() => {})
   }
 
   function toggleAgent(id: string, status: "active" | "suspended") {
     const path = status === "active" ? "suspend" : "reactivate"
     fetch(`/api/agents/${id}/${path}`, { method: "POST" }).catch(() => {})
+  }
+
+  function reset() {
+    if (!confirm("Reset the pool to $500 and clear all activity?")) return
+    fetch("/api/reset", { method: "POST" }).catch(() => {})
   }
 
   return (
@@ -134,7 +156,13 @@ export default function Page() {
         {!state ? (
           <div className="ap-loading caps">loading {MIDDOT} alpha pool</div>
         ) : (
-          <Dashboard state={state} balance={tweenedBalance} onRunRace={runRace} onToggle={toggleAgent} />
+          <Dashboard
+            state={state}
+            balance={tweenedBalance}
+            onRunRace={runRace}
+            onReset={reset}
+            onToggle={toggleAgent}
+          />
         )}
       </main>
     </>
@@ -145,15 +173,18 @@ function Dashboard({
   state,
   balance,
   onRunRace,
+  onReset,
   onToggle,
 }: {
   state: DashboardState
   balance: number
   onRunRace: () => void
+  onReset: () => void
   onToggle: (id: string, status: "active" | "suspended") => void
 }) {
   const { pool, agents, activity, counters, lastConflict } = state
   const spark = sparkline(activity.slice(0, 24).map((a) => a.amount).reverse())
+  const poolAmount = money(pool.balance)
 
   return (
     <div className="ap-page">
@@ -165,7 +196,7 @@ function Dashboard({
         </div>
         <div className="ap-cluster">
           <div className="caps mute">cluster</div>
-          <div className="ap-cluster-val">dsql / us-east-1</div>
+          <div className="ap-cluster-val">dsql / eu-west-1 + eu-west-3</div>
         </div>
       </header>
       <div className="rule-thick" />
@@ -183,14 +214,17 @@ function Dashboard({
         </div>
         <div className="ap-hero-right">
           <div className="caps mute">conflict test</div>
-          <pre className="ap-race">{`   agent-01            agent-02
-      $80                 $80
-        \\               /
-         \\             /
-          ▾           ▾
-        [ pool ] $100 available`}</pre>
+          <pre className="ap-race">{` 10 × agent-01 ──┐
+ 10 × agent-03 ──┤
+                 ▼
+            [ pool ] ${poolAmount} available
+                 ▲
+ 10 × agent-02 ──┘`}</pre>
           <button className="ap-runrace" onClick={onRunRace} type="button">
-            {`▸ run race  [ 2 × $80 vs $100 ]`}
+            {`▸ run race  [ 30 × $80 vs ${poolAmount} ]`}
+          </button>
+          <button className="ap-reset" onClick={onReset} type="button">
+            reset pool
           </button>
         </div>
       </section>
@@ -219,12 +253,13 @@ function Dashboard({
       {/* agents */}
       <section className="ap-section">
         <div className="caps mute ap-section-label">agents {MIDDOT} fleet</div>
-        {agents.map((a) => {
+        {agents.map((a, i) => {
           const suspended = a.status === "suspended"
+          const regionLabel = i === 0 ? "eu-west-1" : "eu-west-3"
           return (
             <div key={a.id} className={`ap-agent-row${suspended ? " faint" : ""}`}>
               <span className="ap-agent-info">
-                {`us-east-1 ${MIDDOT} ${a.name} ${MIDDOT} cap ${money(a.cap)} ${MIDDOT} `}
+                {`${regionLabel} ${MIDDOT} ${a.name} ${MIDDOT} cap ${money(a.cap)} ${MIDDOT} `}
                 {suspended ? (
                   <span className="mute">{"○ suspended"}</span>
                 ) : (
@@ -415,6 +450,22 @@ const styles = `
   text-align: center;
 }
 .ap-runrace:hover { opacity: 0.88; }
+.ap-reset {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--mute);
+  text-decoration: underline;
+  text-transform: lowercase;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+}
+.ap-reset:hover { color: var(--denied); }
 
 /* counters */
 .ap-counters {
