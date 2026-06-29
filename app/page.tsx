@@ -49,20 +49,6 @@ function sparkline(amounts: number[]): string {
     .join("")
 }
 
-// ascii reservoir: fills from the bottom up based on level ratio
-function reservoir(ratio: number, rows = 6, cols = 14): string {
-  const clamped = Math.max(0, Math.min(1, ratio))
-  const filledRows = Math.round(clamped * rows)
-  const lines: string[] = ["╔" + "═".repeat(cols) + "╗"]
-  for (let r = 0; r < rows; r++) {
-    const fromBottom = rows - r
-    const glyph = fromBottom <= filledRows ? "█" : "·"
-    lines.push("║" + glyph.repeat(cols) + "║")
-  }
-  lines.push("╚" + "═".repeat(cols) + "╝")
-  return lines.join("\n")
-}
-
 // soft 150ms ease-out tween for the hero balance numeral
 function useTween(target: number): number {
   const [value, setValue] = useState(target)
@@ -190,6 +176,22 @@ function Dashboard({
   const spark = sparkline(activity.slice(0, 24).map((a) => a.amount).reverse())
   const freshIds = useFreshRows(activity)
 
+  // pool tank capacity = $100 seed, or the highest balance seen if it ever exceeds that
+  const poolCapRef = useRef(10000)
+  poolCapRef.current = Math.max(poolCapRef.current, balance)
+  const poolRatio = balance / poolCapRef.current
+  const poolPct = Math.round(poolRatio * 100)
+
+  // per-agent approved spend (from recent activity) + most recent outcome for tone
+  const spendByAgent = new Map<string, number>()
+  const lastOutcomeByAgent = new Map<string, "approved" | "denied">()
+  for (const row of activity) {
+    if (row.outcome === "approved") {
+      spendByAgent.set(row.agentName, (spendByAgent.get(row.agentName) ?? 0) + row.amount)
+    }
+    if (!lastOutcomeByAgent.has(row.agentName)) lastOutcomeByAgent.set(row.agentName, row.outcome)
+  }
+
   return (
     <div className="ap-page">
       {/* header */}
@@ -215,8 +217,32 @@ function Dashboard({
           <div className="caps mute">last 24 spends</div>
         </div>
         <div className="ap-hero-right">
-          <div className="caps mute">reservoir</div>
-          <Reservoir balance={balance} flash={raceFlash} />
+          <div className="caps mute">{`pool ${MIDDOT} agents`}</div>
+          <div className="iso-tanks">
+            <IsoTank
+              size="lg"
+              ratio={poolRatio}
+              tone="neutral"
+              flash={raceFlash}
+              value={money(Math.round(balance))}
+              label={`pool ${MIDDOT} ${poolPct}%`}
+            />
+            {agents.map((a) => {
+              const spend = spendByAgent.get(a.name) ?? 0
+              const tone = lastOutcomeByAgent.get(a.name) ?? "neutral"
+              return (
+                <IsoTank
+                  key={a.id}
+                  size="sm"
+                  ratio={spend / a.cap}
+                  tone={tone}
+                  flash={raceFlash}
+                  value={money(spend)}
+                  label={a.name}
+                />
+              )
+            })}
+          </div>
           <button className="ap-runrace" onClick={onRunRace} type="button">
             {`> run race  [ 2 × $80 vs $100 ]`}
           </button>
@@ -332,12 +358,23 @@ function useFreshRows(activity: DashboardState["activity"]): Set<string> {
   return fresh
 }
 
-function Reservoir({ balance, flash }: { balance: number; flash: number }) {
-  // high-water mark = the largest balance seen this session, used as tank capacity
-  const capRef = useRef(Math.max(balance, 1))
-  capRef.current = Math.max(capRef.current, balance, 1)
-  const ratio = balance / capRef.current
-  const pct = Math.round(ratio * 100)
+// hard-edged isometric 3D tank: liquid fills bottom-up via a gradient hard-stop
+function IsoTank({
+  ratio,
+  tone = "neutral",
+  size = "lg",
+  flash,
+  label,
+  value,
+}: {
+  ratio: number
+  tone?: "neutral" | "approved" | "denied"
+  size?: "lg" | "sm"
+  flash?: number
+  label: string
+  value: string
+}) {
+  const lvl = `${Math.max(0, Math.min(1, ratio)) * 100}%`
 
   const [flashing, setFlashing] = useState(false)
   useEffect(() => {
@@ -348,9 +385,21 @@ function Reservoir({ balance, flash }: { balance: number; flash: number }) {
   }, [flash])
 
   return (
-    <div className="ap-reservoir">
-      <pre className={`ap-tank${flashing ? " ap-tank-flash" : ""}`}>{reservoir(ratio)}</pre>
-      <div className="caps mute">{`pool level ${MIDDOT} ${pct}%`}</div>
+    <div className={`iso-col iso-${size}`}>
+      <div className="iso-scene">
+        <div
+          className={`iso-tank tone-${tone}${flashing ? " iso-flash" : ""}`}
+          style={{ "--lvl": lvl } as Record<string, string>}
+        >
+          <div className="iso-face iso-front" />
+          <div className="iso-face iso-right" />
+          <div className="iso-face iso-top" />
+        </div>
+      </div>
+      <div className="iso-meta">
+        <div className="iso-val">{value}</div>
+        <div className="caps mute">{label}</div>
+      </div>
     </div>
   )
 }
@@ -474,26 +523,80 @@ const styles = `
   margin-bottom: 8px;
   letter-spacing: 0.04em;
 }
-.ap-reservoir {
-  margin: 12px 0 16px;
+/* isometric 3d tanks */
+.iso-tanks {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 20px 18px;
+  margin: 18px 0 20px;
 }
-.ap-tank {
-  font-family: inherit;
-  font-size: 15px;
-  line-height: 1;
-  letter-spacing: -0.06em;
-  color: var(--ink);
-  margin: 0 0 8px;
-  white-space: pre;
+.iso-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
 }
-.ap-tank-flash {
-  animation: ap-tank-pulse 0.35s steps(1) 0s 4;
+.iso-lg { --w: 84px; --h: 104px; --d: 56px; }
+.iso-sm { --w: 44px; --h: 74px; --d: 30px; }
+.iso-scene {
+  perspective: 720px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: calc(var(--w) + var(--d));
+  height: calc(var(--h) + var(--d) * 0.6);
 }
-@keyframes ap-tank-pulse {
-  0% { color: var(--ink); }
-  50% { color: var(--denied); }
-  100% { color: var(--ink); }
+.iso-tank {
+  position: relative;
+  width: var(--w);
+  height: var(--h);
+  transform-style: preserve-3d;
+  transform: rotateX(-20deg) rotateY(-36deg);
+  --tone: var(--ink);
 }
+.tone-approved { --tone: var(--approved); }
+.tone-denied { --tone: var(--denied); }
+.iso-flash { animation: iso-pulse 0.34s steps(1) 4; }
+@keyframes iso-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.iso-face {
+  position: absolute;
+  border: 1px solid var(--mute);
+}
+.iso-front {
+  width: var(--w);
+  height: var(--h);
+  left: calc(50% - var(--w) / 2);
+  top: calc(50% - var(--h) / 2);
+  transform: translateZ(calc(var(--d) / 2));
+  background: linear-gradient(to top, var(--tone) 0 var(--lvl), transparent var(--lvl));
+}
+.iso-right {
+  width: var(--d);
+  height: var(--h);
+  left: calc(50% - var(--d) / 2);
+  top: calc(50% - var(--h) / 2);
+  transform: rotateY(90deg) translateZ(calc(var(--w) / 2));
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--tone) 62%, #000) 0 var(--lvl),
+    transparent var(--lvl)
+  );
+}
+.iso-top {
+  width: var(--w);
+  height: var(--d);
+  left: calc(50% - var(--w) / 2);
+  top: calc(50% - var(--d) / 2);
+  transform: rotateX(90deg) translateZ(calc(var(--h) / 2));
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.iso-meta { text-align: center; }
+.iso-val { font-size: 14px; line-height: 1; margin-bottom: 7px; }
+.iso-sm .iso-val { font-size: 12px; color: var(--mute); }
 .ap-runrace {
   width: 100%;
   background: var(--ink);
