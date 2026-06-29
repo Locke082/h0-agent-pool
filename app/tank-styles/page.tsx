@@ -127,7 +127,7 @@ export default function TankStylesPage() {
 
         <article className="card">
           <div className="card-stage webgl-stage">
-            <WebglTank ratio={ratio} tone={tone} />
+            <WebglTank ratio={ratio} tone={tone} interactive />
           </div>
           <h2 className="card-title">webgl {MIDDOT} react-three-fiber</h2>
           <p className="card-desc">

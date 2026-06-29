@@ -1,8 +1,9 @@
 "use client"
 
-import { Canvas } from "@react-three/fiber"
-import { Edges, OrbitControls, Environment } from "@react-three/drei"
-import { useMemo } from "react"
+import { Canvas, useFrame } from "@react-three/fiber"
+import { Edges, OrbitControls } from "@react-three/drei"
+import { useMemo, useRef } from "react"
+import type { Group } from "three"
 
 const TONE: Record<string, string> = {
   neutral: "#FAFAF7",
@@ -22,15 +23,24 @@ function Liquid({ ratio, color }: { ratio: number; color: string }) {
   return (
     <mesh position={[0, y, 0]} scale={[W * 0.92, h, D * 0.92]}>
       <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial color={color} roughness={0.25} metalness={0.1} />
+      <meshStandardMaterial
+        color={color}
+        roughness={0.3}
+        metalness={0.05}
+        emissive={color}
+        emissiveIntensity={0.22}
+      />
     </mesh>
   )
 }
 
-function TankMesh({ ratio, tone }: { ratio: number; tone: string }) {
-  const color = TONE[tone] ?? TONE.neutral
+function TankMesh({ ratio, color, spin }: { ratio: number; color: string; spin: boolean }) {
+  const ref = useRef<Group>(null)
+  useFrame((_, delta) => {
+    if (spin && ref.current) ref.current.rotation.y += delta * 0.35
+  })
   return (
-    <group rotation={[0, -0.5, 0]}>
+    <group ref={ref} rotation={[0, -0.5, 0]}>
       {/* glass container */}
       <mesh>
         <boxGeometry args={[W, H, D]} />
@@ -42,16 +52,29 @@ function TankMesh({ ratio, tone }: { ratio: number; tone: string }) {
   )
 }
 
-export default function WebglTank({ ratio, tone }: { ratio: number; tone: string }) {
-  const key = useMemo(() => `${tone}`, [tone])
+export default function WebglTank({
+  ratio,
+  tone,
+  color,
+  interactive = false,
+}: {
+  ratio: number
+  tone?: string
+  color?: string
+  interactive?: boolean
+}) {
+  // explicit color wins; otherwise fall back to the tone palette
+  const resolved = color ?? TONE[tone ?? "neutral"] ?? TONE.neutral
+  const key = useMemo(() => resolved, [resolved])
   return (
     <Canvas key={key} camera={{ position: [3.4, 2.6, 3.8], fov: 38 }} dpr={[1, 2]}>
       <color attach="background" args={["#0A0A0A"]} />
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[4, 6, 3]} intensity={1.1} />
-      <Environment preset="studio" />
-      <TankMesh ratio={ratio} tone={tone} />
-      <OrbitControls enablePan={false} minDistance={3} maxDistance={9} />
+      <ambientLight intensity={0.9} />
+      <directionalLight position={[4, 6, 3]} intensity={1.4} />
+      <directionalLight position={[-5, 2, -4]} intensity={0.5} />
+      <pointLight position={[0, 3, 2]} intensity={12} />
+      <TankMesh ratio={ratio} color={resolved} spin={!interactive} />
+      {interactive && <OrbitControls enablePan={false} minDistance={3} maxDistance={9} />}
     </Canvas>
   )
 }

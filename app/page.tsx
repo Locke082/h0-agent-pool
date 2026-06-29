@@ -1,6 +1,17 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import dynamic from "next/dynamic"
+
+// WebGL renders client-only (three.js touches window/canvas)
+const WebglTank = dynamic(() => import("@/components/webgl-tank"), {
+  ssr: false,
+  loading: () => <div className="gl-loading">···</div>,
+})
+
+// fixed tank colors: pool green, agents blue then red
+const POOL_COLOR = "#4ADE80"
+const AGENT_COLORS = ["#60A5FA", "#F87171"]
 
 type DashboardState = {
   pool: { id: string; name: string; balance: number } // cents
@@ -182,14 +193,12 @@ function Dashboard({
   const poolRatio = balance / poolCapRef.current
   const poolPct = Math.round(poolRatio * 100)
 
-  // per-agent approved spend (from recent activity) + most recent outcome for tone
+  // per-agent approved spend (from recent activity), used to fill each agent tank
   const spendByAgent = new Map<string, number>()
-  const lastOutcomeByAgent = new Map<string, "approved" | "denied">()
   for (const row of activity) {
     if (row.outcome === "approved") {
       spendByAgent.set(row.agentName, (spendByAgent.get(row.agentName) ?? 0) + row.amount)
     }
-    if (!lastOutcomeByAgent.has(row.agentName)) lastOutcomeByAgent.set(row.agentName, row.outcome)
   }
 
   return (
@@ -219,23 +228,22 @@ function Dashboard({
         <div className="ap-hero-right">
           <div className="caps mute">{`pool ${MIDDOT} agents`}</div>
           <div className="iso-tanks">
-            <IsoTank
+            <DashTank
               size="lg"
               ratio={poolRatio}
-              tone="neutral"
+              color={POOL_COLOR}
               flash={raceFlash}
               value={money(Math.round(balance))}
               label={`pool ${MIDDOT} ${poolPct}%`}
             />
-            {agents.map((a) => {
+            {agents.map((a, i) => {
               const spend = spendByAgent.get(a.name) ?? 0
-              const tone = lastOutcomeByAgent.get(a.name) ?? "neutral"
               return (
-                <IsoTank
+                <DashTank
                   key={a.id}
                   size="sm"
                   ratio={spend / a.cap}
-                  tone={tone}
+                  color={AGENT_COLORS[i % AGENT_COLORS.length]}
                   flash={raceFlash}
                   value={money(spend)}
                   label={a.name}
@@ -358,24 +366,22 @@ function useFreshRows(activity: DashboardState["activity"]): Set<string> {
   return fresh
 }
 
-// hard-edged isometric 3D tank: liquid fills bottom-up via a gradient hard-stop
-function IsoTank({
+// WebGL 3D tank: real lit volume that fills bottom-up, fixed color per tank
+function DashTank({
   ratio,
-  tone = "neutral",
+  color,
   size = "lg",
   flash,
   label,
   value,
 }: {
   ratio: number
-  tone?: "neutral" | "approved" | "denied"
+  color: string
   size?: "lg" | "sm"
   flash?: number
   label: string
   value: string
 }) {
-  const lvl = `${Math.max(0, Math.min(1, ratio)) * 100}%`
-
   const [flashing, setFlashing] = useState(false)
   useEffect(() => {
     if (!flash) return
@@ -386,15 +392,8 @@ function IsoTank({
 
   return (
     <div className={`iso-col iso-${size}`}>
-      <div className="iso-scene">
-        <div
-          className={`iso-tank tone-${tone}${flashing ? " iso-flash" : ""}`}
-          style={{ "--lvl": lvl } as Record<string, string>}
-        >
-          <div className="iso-face iso-front" />
-          <div className="iso-face iso-right" />
-          <div className="iso-face iso-top" />
-        </div>
+      <div className={`gl-stage${flashing ? " gl-flash" : ""}`}>
+        <WebglTank ratio={ratio} color={color} />
       </div>
       <div className="iso-meta">
         <div className="iso-val">{value}</div>
@@ -523,7 +522,7 @@ const styles = `
   margin-bottom: 8px;
   letter-spacing: 0.04em;
 }
-/* isometric 3d tanks */
+/* webgl 3d tanks */
 .iso-tanks {
   display: flex;
   align-items: flex-end;
@@ -537,62 +536,25 @@ const styles = `
   align-items: center;
   gap: 12px;
 }
-.iso-lg { --w: 84px; --h: 104px; --d: 56px; }
-.iso-sm { --w: 44px; --h: 74px; --d: 30px; }
-.iso-scene {
-  perspective: 720px;
+.gl-stage {
+  border: 1px solid var(--faint);
+  background: var(--paper);
+}
+.iso-lg .gl-stage { width: 168px; height: 188px; }
+.iso-sm .gl-stage { width: 104px; height: 148px; }
+.gl-flash { animation: gl-pulse 0.34s steps(1) 4; }
+@keyframes gl-pulse {
+  0%, 100% { border-color: var(--faint); }
+  50% { border-color: var(--ink); }
+}
+.gl-loading {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  width: calc(var(--w) + var(--d));
-  height: calc(var(--h) + var(--d) * 0.6);
-}
-.iso-tank {
-  position: relative;
-  width: var(--w);
-  height: var(--h);
-  transform-style: preserve-3d;
-  transform: rotateX(-20deg) rotateY(-36deg);
-  --tone: var(--ink);
-}
-.tone-approved { --tone: var(--approved); }
-.tone-denied { --tone: var(--denied); }
-.iso-flash { animation: iso-pulse 0.34s steps(1) 4; }
-@keyframes iso-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-.iso-face {
-  position: absolute;
-  border: 1px solid var(--mute);
-}
-.iso-front {
-  width: var(--w);
-  height: var(--h);
-  left: calc(50% - var(--w) / 2);
-  top: calc(50% - var(--h) / 2);
-  transform: translateZ(calc(var(--d) / 2));
-  background: linear-gradient(to top, var(--tone) 0 var(--lvl), transparent var(--lvl));
-}
-.iso-right {
-  width: var(--d);
-  height: var(--h);
-  left: calc(50% - var(--d) / 2);
-  top: calc(50% - var(--h) / 2);
-  transform: rotateY(90deg) translateZ(calc(var(--w) / 2));
-  background: linear-gradient(
-    to top,
-    color-mix(in srgb, var(--tone) 62%, #000) 0 var(--lvl),
-    transparent var(--lvl)
-  );
-}
-.iso-top {
-  width: var(--w);
-  height: var(--d);
-  left: calc(50% - var(--w) / 2);
-  top: calc(50% - var(--d) / 2);
-  transform: rotateX(90deg) translateZ(calc(var(--h) / 2));
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  width: 100%;
+  height: 100%;
+  color: var(--mute);
+  font-size: 14px;
 }
 .iso-meta { text-align: center; }
 .iso-val { font-size: 14px; line-height: 1; margin-bottom: 7px; }
