@@ -161,10 +161,8 @@ function Dashboard({
       <header className="ap-header">
         <div>
           <div className="ap-wordmark">agent {MIDDOT} pool</div>
-          <div className="ap-subtitle">a study in shared capital {MIDDOT} no. 001</div>
         </div>
         <div className="ap-cluster">
-          <div className="caps mute">cluster</div>
           <div className="ap-cluster-val">dsql / us-east-1</div>
         </div>
       </header>
@@ -173,7 +171,7 @@ function Dashboard({
       {/* hero */}
       <section className="ap-hero">
         <div className="ap-hero-left">
-          <div className="caps mute">pool balance {MIDDOT} cents stored</div>
+          <div className="caps mute">pool balance</div>
           <div className="ap-balance">
             {`$${Math.floor(balance / 100).toLocaleString("en-US")}`}
             <span className="ap-balance-cents">.{String(Math.round(balance % 100)).padStart(2, "0")}</span>
@@ -183,9 +181,7 @@ function Dashboard({
         </div>
         <div className="ap-hero-right">
           <div className="caps mute">conflict test</div>
-          <pre className="ap-race">{`   agent-01            agent-02
-      $80                 $80
-        \\               /
+          <pre className="ap-race">{`        \\               /
          \\             /
           ▾           ▾
         [ pool ] $100 available`}</pre>
@@ -218,7 +214,7 @@ function Dashboard({
 
       {/* agents */}
       <section className="ap-section">
-        <div className="caps mute ap-section-label">agents {MIDDOT} fleet</div>
+        <div className="caps mute ap-section-label">agents</div>
         {agents.map((a) => {
           const suspended = a.status === "suspended"
           return (
@@ -246,7 +242,7 @@ function Dashboard({
 
       {/* activity feed */}
       <section className="ap-section">
-        <div className="caps mute ap-section-label">activity {MIDDOT} live {MIDDOT} 1000 ms</div>
+        <div className="caps mute ap-section-label">activity</div>
         {activity.slice(0, 20).map((row) => {
           const pill = row.outcome === "approved" ? "[ approved ]" : "[ denied   ]"
           return (
@@ -267,7 +263,6 @@ function Dashboard({
       <div className="rule-thick" />
       <footer className="ap-footer caps">
         <span>invariant {MIDDOT} balance {"≥"} 0 {MIDDOT} enforced in db</span>
-        <span>h0 {MIDDOT} 2026 {MIDDOT} vol. i</span>
       </footer>
     </div>
   )
