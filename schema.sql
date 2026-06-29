@@ -23,9 +23,9 @@ CREATE TABLE transactions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- seed: one pool with $100, two active agents capped at $80 each
+-- seed: one pool with $500, two active agents capped at $80 each
 INSERT INTO pools (id, name, balance) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'alpha', 10000);
+  ('11111111-1111-1111-1111-111111111111', 'alpha', 50000);
 
 INSERT INTO agents (pool_id, name, cap, status) VALUES
   ('11111111-1111-1111-1111-111111111111', 'agent-01', 8000, 'active'),

@@ -188,8 +188,8 @@ function Dashboard({
   const spark = sparkline(activity.slice(0, 24).map((a) => a.amount).reverse())
   const freshIds = useFreshRows(activity)
 
-  // pool tank capacity = $100 seed, or the highest balance seen if it ever exceeds that
-  const poolCapRef = useRef(10000)
+  // pool tank capacity = $500 seed, or the highest balance seen if it ever exceeds that
+  const poolCapRef = useRef(50000)
   poolCapRef.current = Math.max(poolCapRef.current, balance)
   const poolRatio = balance / poolCapRef.current
   const poolPct = Math.round(poolRatio * 100)
@@ -263,7 +263,7 @@ function Dashboard({
             {`> run race  [ 2 × $80 vs $100 ]`}
           </button>
           <button className="ap-reset" onClick={onReset} type="button">
-            {`<< reset demo  [ refill $100 ]`}
+            {`<< reset demo  [ refill $500 ]`}
           </button>
         </div>
       </section>
