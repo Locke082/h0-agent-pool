@@ -143,6 +143,13 @@ export default function Page() {
     fetch(`/api/agents/${id}/${path}`, { method: "POST" }).catch(() => {})
   }
 
+  function resetDemo() {
+    // refill the pool, clear activity, reactivate agents — then poll immediately
+    fetch("/api/reset", { method: "POST" })
+      .then(() => poll())
+      .catch(() => {})
+  }
+
   return (
     <>
       <style>{styles}</style>
@@ -155,6 +162,7 @@ export default function Page() {
             balance={tweenedBalance}
             raceFlash={raceFlash}
             onRunRace={runRace}
+            onReset={resetDemo}
             onToggle={toggleAgent}
           />
         )}
@@ -168,12 +176,14 @@ function Dashboard({
   balance,
   raceFlash,
   onRunRace,
+  onReset,
   onToggle,
 }: {
   state: DashboardState
   balance: number
   raceFlash: number
   onRunRace: () => void
+  onReset: () => void
   onToggle: (id: string, status: "active" | "suspended") => void
 }) {
   const { pool, agents, activity, counters, lastConflict } = state
@@ -209,6 +219,9 @@ function Dashboard({
           <Reservoir balance={balance} flash={raceFlash} />
           <button className="ap-runrace" onClick={onRunRace} type="button">
             {`> run race  [ 2 × $80 vs $100 ]`}
+          </button>
+          <button className="ap-reset" onClick={onReset} type="button">
+            {`<< reset demo  [ refill $100 ]`}
           </button>
         </div>
       </section>
@@ -496,6 +509,22 @@ const styles = `
   text-align: center;
 }
 .ap-runrace:hover { opacity: 0.88; }
+  .ap-reset {
+  width: 100%;
+  margin-top: 8px;
+  background: transparent;
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: lowercase;
+  padding: 12px;
+  cursor: pointer;
+  text-align: center;
+  }
+  .ap-reset:hover { background: var(--ink); color: var(--paper); }
 
 /* counters */
 .ap-counters {
