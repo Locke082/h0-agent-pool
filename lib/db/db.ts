@@ -1,7 +1,9 @@
 import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
 import { AuroraDSQLPool } from "@aws/aurora-dsql-node-postgres-connector";
-import { ClientBase } from "pg";
+import { ClientBase, types } from "pg";
 import { attachDatabasePool } from "@vercel/functions";
+
+types.setTypeParser(20, (v) => parseInt(v, 10)); // 20 = OID for int8/bigint
 
 const pool = new AuroraDSQLPool({
   host: process.env.PGHOST!,
@@ -31,4 +33,21 @@ export async function withConnection<T>(
   } finally {
     client.release();
   }
+}
+
+// Run multiple queries inside a BEGIN/COMMIT transaction, rolling back on error.
+export async function tx<T>(
+  fn: (client: ClientBase) => Promise<T>,
+): Promise<T> {
+  return withConnection(async (client) => {
+    await client.query("BEGIN");
+    try {
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  });
 }
