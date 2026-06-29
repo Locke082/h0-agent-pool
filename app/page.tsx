@@ -554,9 +554,10 @@ const styles = `
 .iso-tanks {
   display: flex;
   align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 20px 18px;
+  flex-wrap: nowrap;
+  gap: 20px 12px;
   margin: 18px 0 20px;
+  overflow-x: auto;
 }
 .iso-col {
   display: flex;
