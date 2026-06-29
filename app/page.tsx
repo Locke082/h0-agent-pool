@@ -286,12 +286,12 @@ const styles = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
 
 :root {
-  --ink: #0A0A0A;
-  --paper: #FAFAF7;
-  --mute: #6B6B66;
-  --faint: #A8A8A2;
-  --approved: #1F7A3A;
-  --denied: #B0241B;
+  --ink: #FAFAF7;
+  --paper: #0A0A0A;
+  --mute: #8A8A84;
+  --faint: #5A5A55;
+  --approved: #4ADE80;
+  --denied: #F87171;
 }
 
 .ap-root * {
