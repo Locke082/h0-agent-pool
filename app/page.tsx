@@ -1,10 +1,22 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import dynamic from "next/dynamic"
+import type { TankSegment } from "@/components/webgl-tank"
+
+// WebGL renders client-only (three.js touches window/canvas)
+const WebglTank = dynamic(() => import("@/components/webgl-tank"), {
+  ssr: false,
+  loading: () => <div className="gl-loading">···</div>,
+})
+
+// fixed tank colors: pool green, then one per agent (blue / red / amber)
+const POOL_COLOR = "#4ADE80"
+const AGENT_COLORS = ["#60A5FA", "#F87171", "#FBBF24"]
 
 type DashboardState = {
   pool: { id: string; name: string; balance: number } // cents
-  agents: Array<{ id: string; name: string; cap: number; status: "active" | "suspended" }> // cap in cents
+  agents: Array<{ id: string; name: string; cap: number; status: "active" | "suspended"; spent: number }> // cap + spent in cents
   activity: Array<{
     id: string
     agentName: string
@@ -19,6 +31,11 @@ type DashboardState = {
 }
 
 const MIDDOT = "·"
+
+// human-facing region per agent (routing is separate — see runRace)
+function agentRegionLabel(name: string): string {
+  return name === "agent-02" ? "eu-west-3" : "eu-west-1"
+}
 
 function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`
@@ -85,6 +102,7 @@ function useTween(target: number): number {
 
 export default function Page() {
   const [state, setState] = useState<DashboardState | null>(null)
+  const [raceFlash, setRaceFlash] = useState(0)
 
   const poll = useCallback(async () => {
     try {
@@ -126,6 +144,7 @@ export default function Page() {
     const a2 = byName("agent-02")
     const a3 = byName("agent-03")
     if (!a1 || !a2 || !a3) return
+    setRaceFlash(Date.now()) // pulse the tanks while the race resolves
     // fleet burst: 30 concurrent $80 spends — agent-01 & agent-03 hit primary
     // (eu-west-1), agent-02 hits secondary (eu-west-3). 10 each.
     // per-promise catch so one failed request can't sink the rest.
@@ -144,9 +163,11 @@ export default function Page() {
     fetch(`/api/agents/${id}/${path}`, { method: "POST" }).catch(() => {})
   }
 
-  function reset() {
-    if (!confirm("Reset the pool to $500 and clear all activity?")) return
-    fetch("/api/reset", { method: "POST" }).catch(() => {})
+  function resetDemo() {
+    // refill the pool, clear activity, reactivate agents — then poll immediately
+    fetch("/api/reset", { method: "POST" })
+      .then(() => poll())
+      .catch(() => {})
   }
 
   return (
@@ -159,8 +180,9 @@ export default function Page() {
           <Dashboard
             state={state}
             balance={tweenedBalance}
+            raceFlash={raceFlash}
             onRunRace={runRace}
-            onReset={reset}
+            onReset={resetDemo}
             onToggle={toggleAgent}
           />
         )}
@@ -172,19 +194,27 @@ export default function Page() {
 function Dashboard({
   state,
   balance,
+  raceFlash,
   onRunRace,
   onReset,
   onToggle,
 }: {
   state: DashboardState
   balance: number
+  raceFlash: number
   onRunRace: () => void
   onReset: () => void
   onToggle: (id: string, status: "active" | "suspended") => void
 }) {
   const { pool, agents, activity, counters, lastConflict } = state
   const spark = sparkline(activity.slice(0, 24).map((a) => a.amount).reverse())
-  const poolAmount = money(pool.balance)
+  const freshIds = useFreshRows(activity)
+
+  // pool tank capacity = $500 seed, or the highest balance seen if it ever exceeds that
+  const poolCapRef = useRef(50000)
+  poolCapRef.current = Math.max(poolCapRef.current, balance)
+  const poolRatio = balance / poolCapRef.current
+  const poolPct = Math.round(poolRatio * 100)
 
   return (
     <div className="ap-page">
@@ -192,39 +222,64 @@ function Dashboard({
       <header className="ap-header">
         <div>
           <div className="ap-wordmark">agent {MIDDOT} pool</div>
-          <div className="ap-subtitle">a study in shared capital {MIDDOT} no. 001</div>
         </div>
         <div className="ap-cluster">
-          <div className="caps mute">cluster</div>
           <div className="ap-cluster-val">dsql / eu-west-1 + eu-west-3</div>
         </div>
       </header>
       <div className="rule-thick" />
 
+      {/* context strip */}
+      <div className="ap-context caps mute">
+        {`tenant: acme-ai  ${MIDDOT}  daily budget cycle  ${MIDDOT}  ceiling: $500.00  ${MIDDOT}  3 agents ${MIDDOT} 2 regions`}
+      </div>
+
       {/* hero */}
       <section className="ap-hero">
         <div className="ap-hero-left">
-          <div className="caps mute">pool balance {MIDDOT} cents stored</div>
+          <div className="caps mute">pool balance</div>
           <div className="ap-balance">
             {`$${Math.floor(balance / 100).toLocaleString("en-US")}`}
             <span className="ap-balance-cents">.{String(Math.round(balance % 100)).padStart(2, "0")}</span>
           </div>
-          <div className="ap-spark">{spark || " "}</div>
+          <div className="ap-spark">{spark || " "}</div>
           <div className="caps mute">last 24 spends</div>
         </div>
         <div className="ap-hero-right">
-          <div className="caps mute">conflict test</div>
-          <pre className="ap-race">{` 10 × agent-01 ──┐
- 10 × agent-03 ──┤
-                 ▼
-            [ pool ] ${poolAmount} available
-                 ▲
- 10 × agent-02 ──┘`}</pre>
+          <div className="caps mute">{`pool ${MIDDOT} agents`}</div>
+          <div className="iso-tanks">
+            <DashTank
+              size="lg"
+              segments={[{ amount: balance, outcome: "approved" }]}
+              capacity={poolCapRef.current}
+              color={POOL_COLOR}
+              flash={raceFlash}
+              value={money(Math.round(balance))}
+              label={`pool ${MIDDOT} ${poolPct}%`}
+            />
+            {agents.map((a, i) => (
+              <DashTank
+                key={a.id}
+                size="sm"
+                // authoritative cumulative approved spend — stable across polls,
+                // not derived from the 30-row activity window
+                segments={[{ amount: a.spent, outcome: "approved" }]}
+                capacity={poolCapRef.current}
+                color={AGENT_COLORS[i % AGENT_COLORS.length]}
+                flash={raceFlash}
+                value={money(a.spent)}
+                label={a.name}
+              />
+            ))}
+          </div>
           <button className="ap-runrace" onClick={onRunRace} type="button">
-            {`▸ run race  [ 30 × $80 vs ${poolAmount} ]`}
+            {`▸ simulate fleet burst  [ 30 concurrent spends ]`}
           </button>
+          <div className="ap-burst-caption">
+            30 concurrent authorization requests across eu-west-1 + eu-west-3
+          </div>
           <button className="ap-reset" onClick={onReset} type="button">
-            reset pool
+            {`<< reset demo  [ refill $500 ]`}
           </button>
         </div>
       </section>
@@ -252,10 +307,10 @@ function Dashboard({
 
       {/* agents */}
       <section className="ap-section">
-        <div className="caps mute ap-section-label">agents {MIDDOT} fleet</div>
-        {agents.map((a, i) => {
+        <div className="caps mute ap-section-label">agents</div>
+        {agents.map((a) => {
           const suspended = a.status === "suspended"
-          const regionLabel = i === 0 ? "eu-west-1" : "eu-west-3"
+          const regionLabel = agentRegionLabel(a.name)
           return (
             <div key={a.id} className={`ap-agent-row${suspended ? " faint" : ""}`}>
               <span className="ap-agent-info">
@@ -281,11 +336,13 @@ function Dashboard({
 
       {/* activity feed */}
       <section className="ap-section">
-        <div className="caps mute ap-section-label">activity {MIDDOT} live {MIDDOT} 1000 ms</div>
-        {activity.slice(0, 20).map((row) => {
+        <div className="caps mute ap-section-label">activity</div>
+        {activity.slice(0, 30).map((row) => {
           const pill = row.outcome === "approved" ? "[ approved ]" : "[ denied   ]"
+          const fresh = freshIds.has(row.id)
+          const freshClass = fresh ? (row.outcome === "approved" ? " fresh-approved" : " fresh-denied") : ""
           return (
-            <div key={row.id} className="ap-activity-row">
+            <div key={row.id} className={`ap-activity-row${freshClass}`}>
               <span className="mute">{fmtTime(row.createdAt)}</span>
               <span>{` ${MIDDOT} ${row.agentName} ${MIDDOT} −${money(row.amount)} ${MIDDOT} `}</span>
               <span className={row.outcome === "approved" ? "approved" : "denied"}>{pill}</span>
@@ -302,8 +359,74 @@ function Dashboard({
       <div className="rule-thick" />
       <footer className="ap-footer caps">
         <span>invariant {MIDDOT} balance {"≥"} 0 {MIDDOT} enforced in db</span>
-        <span>h0 {MIDDOT} 2026 {MIDDOT} vol. i</span>
+        <span>built on aurora dsql {MIDDOT} multi-region active-active</span>
       </footer>
+    </div>
+  )
+}
+
+// returns the set of activity ids that arrived since the previous poll,
+// briefly, so the feed can highlight just-landed rows
+function useFreshRows(activity: DashboardState["activity"]): Set<string> {
+  const seenRef = useRef<Set<string> | null>(null)
+  const [fresh, setFresh] = useState<Set<string>>(new Set())
+  const key = activity.map((a) => a.id).join(",")
+
+  useEffect(() => {
+    const ids = activity.map((a) => a.id)
+    if (seenRef.current === null) {
+      // first load: adopt baseline without flagging everything as fresh
+      seenRef.current = new Set(ids)
+      return
+    }
+    const seen = seenRef.current
+    const incoming = ids.filter((id) => !seen.has(id))
+    ids.forEach((id) => seen.add(id))
+    if (incoming.length === 0) return
+    setFresh(new Set(incoming))
+    const t = setTimeout(() => setFresh(new Set()), 1100)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+
+  return fresh
+}
+
+// WebGL 3D tank: real lit volume that fills bottom-up, fixed color per tank
+function DashTank({
+  segments,
+  capacity,
+  color,
+  size = "lg",
+  flash,
+  label,
+  value,
+}: {
+  segments: TankSegment[]
+  capacity: number
+  color: string
+  size?: "lg" | "sm"
+  flash?: number
+  label: string
+  value: string
+}) {
+  const [flashing, setFlashing] = useState(false)
+  useEffect(() => {
+    if (!flash) return
+    setFlashing(true)
+    const t = setTimeout(() => setFlashing(false), 1400)
+    return () => clearTimeout(t)
+  }, [flash])
+
+  return (
+    <div className={`iso-col iso-${size}`}>
+      <div className={`gl-stage${flashing ? " gl-flash" : ""}`}>
+        <WebglTank segments={segments} capacity={capacity} color={color} />
+      </div>
+      <div className="iso-meta">
+        <div className="iso-val">{value}</div>
+        <div className="caps mute">{label}</div>
+      </div>
     </div>
   )
 }
@@ -321,12 +444,12 @@ const styles = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
 
 :root {
-  --ink: #0A0A0A;
-  --paper: #FAFAF7;
-  --mute: #6B6B66;
-  --faint: #A8A8A2;
-  --approved: #1F7A3A;
-  --denied: #B0241B;
+  --ink: #FAFAF7;
+  --paper: #0A0A0A;
+  --mute: #8A8A84;
+  --faint: #5A5A55;
+  --approved: #4ADE80;
+  --denied: #F87171;
 }
 
 .ap-root * {
@@ -427,14 +550,43 @@ const styles = `
   margin-bottom: 8px;
   letter-spacing: 0.04em;
 }
-.ap-race {
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--ink);
-  margin: 12px 0 16px;
-  white-space: pre;
+/* webgl 3d tanks */
+.iso-tanks {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 20px 18px;
+  margin: 18px 0 20px;
 }
+.iso-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.gl-stage {
+  border: 1px solid var(--faint);
+  background: var(--paper);
+}
+.iso-lg .gl-stage { width: 168px; height: 188px; }
+.iso-sm .gl-stage { width: 104px; height: 148px; }
+.gl-flash { animation: gl-pulse 0.34s steps(1) 4; }
+@keyframes gl-pulse {
+  0%, 100% { border-color: var(--faint); }
+  50% { border-color: var(--ink); }
+}
+.gl-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--mute);
+  font-size: 14px;
+}
+.iso-meta { text-align: center; }
+.iso-val { font-size: 14px; line-height: 1; margin-bottom: 7px; }
+.iso-sm .iso-val { font-size: 12px; color: var(--mute); }
 .ap-runrace {
   width: 100%;
   background: var(--ink);
@@ -451,21 +603,35 @@ const styles = `
 }
 .ap-runrace:hover { opacity: 0.88; }
 .ap-reset {
-  display: block;
   width: 100%;
-  margin-top: 10px;
-  background: none;
-  border: none;
+  margin-top: 8px;
+  background: transparent;
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 0;
   font-family: inherit;
-  font-size: 11px;
-  color: var(--mute);
-  text-decoration: underline;
+  font-size: 13px;
+  font-weight: 500;
   text-transform: lowercase;
-  text-align: center;
+  padding: 12px;
   cursor: pointer;
-  padding: 0;
+  text-align: center;
 }
-.ap-reset:hover { color: var(--denied); }
+.ap-reset:hover { background: var(--ink); color: var(--paper); }
+.ap-burst-caption {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--mute);
+  letter-spacing: 0.04em;
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* context strip */
+.ap-context {
+  padding: 12px 0;
+  color: var(--mute);
+}
 
 /* counters */
 .ap-counters {
@@ -517,6 +683,26 @@ const styles = `
   line-height: 1.9;
   white-space: pre-wrap;
   word-break: break-word;
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 2px solid transparent;
+  transition: margin-left 0.15s ease-out;
+}
+.fresh-approved {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left-color: var(--approved);
+  animation: ap-row-fade 1.1s ease-out forwards;
+}
+.fresh-denied {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left-color: var(--denied);
+  animation: ap-row-fade 1.1s ease-out forwards;
+}
+@keyframes ap-row-fade {
+  0% { background: var(--faint); }
+  100% { background: transparent; }
 }
 
 /* footer */

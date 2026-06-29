@@ -11,6 +11,7 @@ export type DashboardState = {
     name: string;
     cap: number;
     status: "active" | "suspended";
+    spent: number; // cumulative approved spend in cents, across ALL transactions
   }>;
   activity: Array<{
     id: string;
@@ -90,10 +91,45 @@ async function fetchLastConflict(): Promise<DashboardState["lastConflict"]> {
   }
 }
 
+// Agents with their authoritative cumulative approved spend (across ALL
+// transactions, not the 30-row activity window). JOIN+GROUP BY first; fall back
+// to two queries merged in JS if DSQL rejects the combo.
+async function fetchAgents(): Promise<DashboardState["agents"]> {
+  const toAgent = (a: Row) => ({
+    id: a.id,
+    name: a.name,
+    cap: a.cap,
+    status: a.status as "active" | "suspended",
+    spent: a.spent ?? 0,
+  });
+  try {
+    const { rows } = await query(
+      `SELECT a.id, a.name, a.cap, a.status,
+              COALESCE(SUM(t.amount) FILTER (WHERE t.outcome = 'approved'), 0)::bigint AS spent
+       FROM agents a LEFT JOIN transactions t ON t.agent_id = a.id
+       GROUP BY a.id, a.name, a.cap, a.status
+       ORDER BY a.name`,
+      [],
+    );
+    return rows.map(toAgent);
+  } catch {
+    const [{ rows: agents }, { rows: sums }] = await Promise.all([
+      query("SELECT id, name, cap, status FROM agents ORDER BY name", []),
+      query(
+        `SELECT agent_id, COALESCE(SUM(amount) FILTER (WHERE outcome = 'approved'), 0)::bigint AS spent
+         FROM transactions GROUP BY agent_id`,
+        [],
+      ),
+    ]);
+    const spentByAgent = new Map<string, number>(sums.map((s: Row) => [s.agent_id, s.spent]));
+    return agents.map((a: Row) => toAgent({ ...a, spent: spentByAgent.get(a.id) ?? 0 }));
+  }
+}
+
 export async function getDashboardState(): Promise<DashboardState> {
-  const [poolRes, agentsRes, activity, countersRes, lastConflict] = await Promise.all([
+  const [poolRes, agents, activity, countersRes, lastConflict] = await Promise.all([
     query("SELECT id, name, balance FROM pools WHERE name = 'alpha' LIMIT 1", []),
-    query("SELECT id, name, cap, status FROM agents ORDER BY name", []),
+    fetchAgents(),
     fetchActivity(),
     query(
       `SELECT COUNT(*) AS spends,
@@ -109,7 +145,7 @@ export async function getDashboardState(): Promise<DashboardState> {
   const c = countersRes.rows[0];
   return {
     pool: { id: p.id, name: p.name, balance: p.balance },
-    agents: agentsRes.rows.map((a: Row) => ({ id: a.id, name: a.name, cap: a.cap, status: a.status })),
+    agents,
     activity,
     counters: { spends: c.spends, approved: c.approved, denied: c.denied, serialization: c.serialization },
     lastConflict,
