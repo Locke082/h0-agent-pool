@@ -99,6 +99,7 @@ function useTween(target: number): number {
 
 export default function Page() {
   const [state, setState] = useState<DashboardState | null>(null)
+  const [raceFlash, setRaceFlash] = useState(0)
 
   const poll = useCallback(async () => {
     try {
@@ -129,6 +130,7 @@ export default function Page() {
 
   function runRace() {
     if (!state || state.agents.length < 2) return
+    setRaceFlash(Date.now()) // pulse the reservoir while the race resolves
     // don't await — the 1s poll reflects results
     Promise.all([
       spend(state.agents[0].id, 8000, "us-east-1"),
@@ -148,7 +150,13 @@ export default function Page() {
         {!state ? (
           <div className="ap-loading caps">loading {MIDDOT} alpha pool</div>
         ) : (
-          <Dashboard state={state} balance={tweenedBalance} onRunRace={runRace} onToggle={toggleAgent} />
+          <Dashboard
+            state={state}
+            balance={tweenedBalance}
+            raceFlash={raceFlash}
+            onRunRace={runRace}
+            onToggle={toggleAgent}
+          />
         )}
       </main>
     </>
@@ -158,16 +166,19 @@ export default function Page() {
 function Dashboard({
   state,
   balance,
+  raceFlash,
   onRunRace,
   onToggle,
 }: {
   state: DashboardState
   balance: number
+  raceFlash: number
   onRunRace: () => void
   onToggle: (id: string, status: "active" | "suspended") => void
 }) {
   const { pool, agents, activity, counters, lastConflict } = state
   const spark = sparkline(activity.slice(0, 24).map((a) => a.amount).reverse())
+  const freshIds = useFreshRows(activity)
 
   return (
     <div className="ap-page">
@@ -195,7 +206,7 @@ function Dashboard({
         </div>
         <div className="ap-hero-right">
           <div className="caps mute">reservoir</div>
-          <Reservoir balance={balance} />
+          <Reservoir balance={balance} flash={raceFlash} />
           <button className="ap-runrace" onClick={onRunRace} type="button">
             {`> run race  [ 2 × $80 vs $100 ]`}
           </button>
@@ -256,8 +267,10 @@ function Dashboard({
         <div className="caps mute ap-section-label">activity</div>
         {activity.slice(0, 20).map((row) => {
           const pill = row.outcome === "approved" ? "[ approved ]" : "[ denied   ]"
+          const fresh = freshIds.has(row.id)
+          const freshClass = fresh ? (row.outcome === "approved" ? " fresh-approved" : " fresh-denied") : ""
           return (
-            <div key={row.id} className="ap-activity-row">
+            <div key={row.id} className={`ap-activity-row${freshClass}`}>
               <span className="mute">{fmtTime(row.createdAt)}</span>
               <span>{` ${MIDDOT} ${row.agentName} ${MIDDOT} −${money(row.amount)} ${MIDDOT} `}</span>
               <span className={row.outcome === "approved" ? "approved" : "denied"}>{pill}</span>
@@ -279,15 +292,51 @@ function Dashboard({
   )
 }
 
-function Reservoir({ balance }: { balance: number }) {
+// returns the set of activity ids that arrived since the previous poll,
+// briefly, so the feed can highlight just-landed rows
+function useFreshRows(activity: DashboardState["activity"]): Set<string> {
+  const seenRef = useRef<Set<string> | null>(null)
+  const [fresh, setFresh] = useState<Set<string>>(new Set())
+  const key = activity.map((a) => a.id).join(",")
+
+  useEffect(() => {
+    const ids = activity.map((a) => a.id)
+    if (seenRef.current === null) {
+      // first load: adopt baseline without flagging everything as fresh
+      seenRef.current = new Set(ids)
+      return
+    }
+    const seen = seenRef.current
+    const incoming = ids.filter((id) => !seen.has(id))
+    ids.forEach((id) => seen.add(id))
+    if (incoming.length === 0) return
+    setFresh(new Set(incoming))
+    const t = setTimeout(() => setFresh(new Set()), 1100)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+
+  return fresh
+}
+
+function Reservoir({ balance, flash }: { balance: number; flash: number }) {
   // high-water mark = the largest balance seen this session, used as tank capacity
   const capRef = useRef(Math.max(balance, 1))
   capRef.current = Math.max(capRef.current, balance, 1)
   const ratio = balance / capRef.current
   const pct = Math.round(ratio * 100)
+
+  const [flashing, setFlashing] = useState(false)
+  useEffect(() => {
+    if (!flash) return
+    setFlashing(true)
+    const t = setTimeout(() => setFlashing(false), 1400)
+    return () => clearTimeout(t)
+  }, [flash])
+
   return (
     <div className="ap-reservoir">
-      <pre className="ap-tank">{reservoir(ratio)}</pre>
+      <pre className={`ap-tank${flashing ? " ap-tank-flash" : ""}`}>{reservoir(ratio)}</pre>
       <div className="caps mute">{`pool level ${MIDDOT} ${pct}%`}</div>
     </div>
   )
@@ -424,6 +473,14 @@ const styles = `
   margin: 0 0 8px;
   white-space: pre;
 }
+.ap-tank-flash {
+  animation: ap-tank-pulse 0.35s steps(1) 0s 4;
+}
+@keyframes ap-tank-pulse {
+  0% { color: var(--ink); }
+  50% { color: var(--denied); }
+  100% { color: var(--ink); }
+}
 .ap-runrace {
   width: 100%;
   background: var(--ink);
@@ -490,6 +547,26 @@ const styles = `
   line-height: 1.9;
   white-space: pre-wrap;
   word-break: break-word;
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 2px solid transparent;
+  transition: margin-left 0.15s ease-out;
+}
+.fresh-approved {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left-color: var(--approved);
+  animation: ap-row-fade 1.1s ease-out forwards;
+}
+.fresh-denied {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left-color: var(--denied);
+  animation: ap-row-fade 1.1s ease-out forwards;
+}
+@keyframes ap-row-fade {
+  0% { background: var(--faint); }
+  100% { background: transparent; }
 }
 
 /* footer */
