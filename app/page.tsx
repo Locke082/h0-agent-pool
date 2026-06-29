@@ -129,11 +129,14 @@ export default function Page() {
   function runRace() {
     if (!state || state.agents.length < 2) return
     setRaceFlash(Date.now()) // pulse the reservoir while the race resolves
-    // don't await — the 1s poll reflects results
-    Promise.all([
-      spend(state.agents[0].id, 8000, "us-east-1"),
-      spend(state.agents[1].id, 8000, "eu-west-1"),
-    ]).catch(() => {})
+    // 10 concurrent $60 spends ($600) contend for a $500 pool — some must be denied.
+    // alternate across agents/regions; don't await — the 1s poll reflects results.
+    const regions = ["us-east-1", "eu-west-1"]
+    const requests = Array.from({ length: 10 }, (_, i) => {
+      const agent = state.agents[i % state.agents.length]
+      return spend(agent.id, 6000, regions[i % regions.length])
+    })
+    Promise.all(requests).catch(() => {})
   }
 
   function toggleAgent(id: string, status: "active" | "suspended") {
@@ -260,7 +263,7 @@ function Dashboard({
             })}
           </div>
           <button className="ap-runrace" onClick={onRunRace} type="button">
-            {`> run race  [ 2 × $80 vs $100 ]`}
+            {`> run race  [ 10 × $60 vs $500 ]`}
           </button>
           <button className="ap-reset" onClick={onReset} type="button">
             {`<< reset demo  [ refill $500 ]`}
